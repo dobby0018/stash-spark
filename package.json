@@ -1,0 +1,11 @@
+{
+  "name": "cloudkeep-mongodb",
+  "version": "2.0.0",
+  "private": true,
+  "scripts": {
+    "install:all": "npm --prefix server install && npm --prefix client install",
+    "dev": "concurrently \"npm --prefix server run dev\" \"npm --prefix client run dev\"",
+    "build": "npm --prefix client run build"
+  },
+  "devDependencies": { "concurrently": "^9.1.2" }
+}
