@@ -13,29 +13,24 @@ import { Item } from './models/Item.js';
 import { Product } from './models/Product.js';
 import { Order } from './models/Order.js';
 import { z } from 'zod';
+import { createGoogleAuthRouter } from './routes/googleAuth.js';
+import { createAdminCustomersRouter } from './routes/adminCustomers.js';
+
 const app = express();
 const port = Number(process.env.PORT || 5000);
 const isProduction = process.env.NODE_ENV === 'production';
 
-const DEFAULT_JWT_SECRET =
-  'replace_this_with_a_long_random_secret';
-
-const DEFAULT_ADMIN_CODE =
-  'replace_with_a_long_random_admin_invite_code';
+const DEFAULT_JWT_SECRET = 'replace_this_with_a_long_random_secret';
+const DEFAULT_ADMIN_CODE = 'replace_with_a_long_random_admin_invite_code';
 
 if (
   !process.env.JWT_SECRET ||
   process.env.JWT_SECRET === DEFAULT_JWT_SECRET
 ) {
   if (isProduction) {
-    throw new Error(
-      'Set a strong, private JWT_SECRET in server/.env.'
-    );
+    throw new Error('Set a strong, private JWT_SECRET in server/.env.');
   }
-
-  console.warn(
-    'WARNING: Configure a private JWT_SECRET.'
-  );
+  console.warn('WARNING: Configure a private JWT_SECRET.');
 }
 
 app.disable('x-powered-by');
@@ -48,11 +43,7 @@ app.use(cors({
 
 app.use(express.json({ limit: '50kb' }));
 app.use(cookieParser());
-// =====================================================
-// RATE LIMITING
-// =====================================================
 
-// General API limit: 100 requests per 15 minutes per IP.
 const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   limit: 100,
@@ -63,7 +54,6 @@ const apiLimiter = rateLimit({
   }
 });
 
-// Authentication limit: 10 requests per 15 minutes per IP.
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   limit: 10,
@@ -74,26 +64,20 @@ const authLimiter = rateLimit({
   }
 });
 
-// Apply the general limit to API endpoints.
 app.use('/api', apiLimiter);
-// =====================================================
-// CSRF PROTECTION: CHECK REQUEST ORIGIN
-// =====================================================
-//uknow 
+
 const trustedClientOrigin =
   process.env.CLIENT_ORIGIN || 'http://localhost:5173';
 
 app.use('/api', (req, res, next) => {
   const modifyingMethods = ['POST', 'PUT', 'PATCH', 'DELETE'];
 
-  // Read-only requests do not need this Origin check.
   if (!modifyingMethods.includes(req.method)) {
     return next();
   }
 
   const requestOrigin = req.get('origin');
 
-  // Reject missing or untrusted origins.
   if (!requestOrigin || requestOrigin !== trustedClientOrigin) {
     return res.status(403).json({
       error: 'Request origin is not allowed.'
@@ -102,6 +86,7 @@ app.use('/api', (req, res, next) => {
 
   return next();
 });
+
 const cookieOptions = {
   httpOnly: true,
   secure: isProduction,
@@ -109,10 +94,6 @@ const cookieOptions = {
   maxAge: 7 * 24 * 60 * 60 * 1000,
   path: '/'
 };
-
-// =====================================================
-// AUTHENTICATION HELPERS
-// =====================================================
 
 function createToken(user) {
   return jwt.sign(
@@ -140,7 +121,6 @@ async function requireAuth(req, res, next) {
     decoded = jwt.verify(token, process.env.JWT_SECRET);
   } catch {
     res.clearCookie('session', cookieOptions);
-
     return res.status(401).json({
       error: 'Your session expired. Please sign in again.'
     });
@@ -148,20 +128,17 @@ async function requireAuth(req, res, next) {
 
   if (!mongoose.isValidObjectId(decoded.sub)) {
     res.clearCookie('session', cookieOptions);
-
     return res.status(401).json({
       error: 'Invalid session.'
     });
   }
 
   try {
-    // Always read the current role from the database.
     const account = await User.findById(decoded.sub)
       .select('email role');
 
     if (!account) {
       res.clearCookie('session', cookieOptions);
-
       return res.status(401).json({
         error: 'Account not found.'
       });
@@ -196,10 +173,6 @@ const validEmail = (email) =>
 
 const isValidId = (id) =>
   mongoose.isValidObjectId(id);
-
-// =====================================================
-// RESPONSE HELPERS
-// =====================================================
 
 function publicUser(user) {
   return {
@@ -267,10 +240,6 @@ function publicOrder(order) {
   };
 }
 
-// =====================================================
-// PRODUCT VALIDATION
-// =====================================================
-
 function parseProductPayload(body, { partial = false } = {}) {
   if (
     !body ||
@@ -281,10 +250,8 @@ function parseProductPayload(body, { partial = false } = {}) {
   }
 
   const data = {};
-
   const has = (key) =>
     Object.prototype.hasOwnProperty.call(body, key);
-
   const supplied = (key) =>
     has(key) && body[key] !== undefined;
 
@@ -421,10 +388,6 @@ function parseProductPayload(body, { partial = false } = {}) {
   return { data };
 }
 
-// =====================================================
-// LEGACY ITEM WORKSPACE HELPERS
-// =====================================================
-
 function itemFilterFor(user) {
   if (user.role === 'admin') {
     return { scope: 'admin' };
@@ -454,10 +417,6 @@ function itemFilterByIdFor(user, id) {
   };
 }
 
-// =====================================================
-// HEALTH CHECK
-// =====================================================
-
 app.get('/api/health', (_req, res) => {
   res.json({
     status: 'ok',
@@ -468,24 +427,18 @@ app.get('/api/health', (_req, res) => {
   });
 });
 
-// =====================================================
-// AUTHENTICATION ROUTES
-// =====================================================
+// ================= AUTHENTICATION ROUTES =================
 
 app.post('/api/auth/signup', authLimiter, async (req, res, next) => {
   try {
     const body = req.body ?? {};
-
     const email =
       typeof body.email === 'string'
         ? body.email.trim().toLowerCase()
         : '';
-
     const password = body.password;
-
     const requestedRole =
       body.role === undefined ? 'user' : body.role;
-
     const adminCode =
       typeof body.adminCode === 'string'
         ? body.adminCode
@@ -558,12 +511,10 @@ app.post('/api/auth/signup', authLimiter, async (req, res, next) => {
 app.post('/api/auth/signin', authLimiter, async (req, res, next) => {
   try {
     const body = req.body ?? {};
-
     const email =
       typeof body.email === 'string'
         ? body.email.trim().toLowerCase()
         : '';
-
     const password = body.password;
 
     if (!validEmail(email) || typeof password !== 'string') {
@@ -577,6 +528,7 @@ app.post('/api/auth/signin', authLimiter, async (req, res, next) => {
 
     if (
       !user ||
+      !user.passwordHash ||
       !(await bcrypt.compare(password, user.passwordHash))
     ) {
       return res.status(401).json({
@@ -595,21 +547,80 @@ app.post('/api/auth/signin', authLimiter, async (req, res, next) => {
   }
 });
 
+// Return current user and whether a Google user needs to create a password.
 app.get('/api/auth/me', requireAuth, async (req, res, next) => {
   try {
-    const user = await User.findById(req.user.sub);
+    const account = await User.findById(req.user.sub)
+      .select('+passwordHash');
 
-    if (!user) {
+    if (!account) {
       return res.status(401).json({
         error: 'Account not found.'
       });
     }
 
-    return res.json({ user: publicUser(user) });
+    return res.json({
+      user: publicUser(account),
+      needsPasswordSetup: Boolean(
+        account.googleId && !account.passwordHash
+      )
+    });
   } catch (error) {
     return next(error);
   }
 });
+
+// Create an initial password for a Google account without one.
+app.post(
+  '/api/auth/set-password',
+  authLimiter,
+  requireAuth,
+  async (req, res, next) => {
+    const password = req.body?.password;
+
+    if (
+      typeof password !== 'string' ||
+      password.length < 8 ||
+      password.length > 72
+    ) {
+      return res.status(400).json({
+        error: 'Password must be 8–72 characters long.'
+      });
+    }
+
+    try {
+      const account = await User.findById(req.user.sub)
+        .select('+passwordHash');
+
+      if (!account) {
+        return res.status(404).json({
+          error: 'Account not found.'
+        });
+      }
+
+      if (!account.googleId) {
+        return res.status(403).json({
+          error: 'This endpoint is only for Google accounts.'
+        });
+      }
+
+      if (account.passwordHash) {
+        return res.status(409).json({
+          error: 'This account already has a password.'
+        });
+      }
+
+      account.passwordHash = await bcrypt.hash(password, 12);
+      await account.save();
+
+      return res.json({
+        message: 'Password created successfully.'
+      });
+    } catch (error) {
+      return next(error);
+    }
+  }
+);
 
 app.post('/api/auth/signout', (_req, res) => {
   res.clearCookie('session', {
@@ -622,12 +633,33 @@ app.post('/api/auth/signout', (_req, res) => {
   return res.json({ message: 'Signed out.' });
 });
 
-// =====================================================
-// PRODUCT ROUTES
-// =====================================================
+// Google sign-up/sign-in and admin customer-management routers.
+app.use(
+  '/api/auth',
+  createGoogleAuthRouter({
+    User,
+    createToken,
+    cookieOptions,
+    publicUser,
+    authLimiter
+  })
+);
 
-// Signed-in users see active products.
-// Admins can see inactive products as well.
+app.use(
+  '/api/admin/customers',
+  createAdminCustomersRouter({
+    User,
+    Order,
+    Item,
+    Product,
+    mongoose,
+    requireAuth,
+    requireAdmin
+  })
+);
+
+// ================= PRODUCT ROUTES =================
+
 app.get('/api/products', requireAuth, async (req, res, next) => {
   try {
     const filter = req.user.role === 'admin'
@@ -676,7 +708,6 @@ app.get('/api/products/:id', requireAuth, async (req, res, next) => {
   }
 });
 
-// Admin creates products.
 app.post(
   '/api/products',
   requireAuth,
@@ -717,7 +748,6 @@ app.post(
   }
 );
 
-// Admin updates product details or stock.
 app.put(
   '/api/products/:id',
   requireAuth,
@@ -732,10 +762,9 @@ app.put(
         });
       }
 
-      const parsed = parseProductPayload(
-        req.body,
-        { partial: true }
-      );
+      const parsed = parseProductPayload(req.body, {
+        partial: true
+      });
 
       if (parsed.error) {
         return res.status(400).json({ error: parsed.error });
@@ -778,7 +807,6 @@ app.put(
   }
 );
 
-// Admin deactivates products instead of hard deleting them.
 app.delete(
   '/api/products/:id',
   requireAuth,
@@ -815,15 +843,8 @@ app.delete(
   }
 );
 
-// =====================================================
-// ORDER ROUTES
-// =====================================================
+// ================= ORDER ROUTES =================
 
-// Customer places an order for one product.
-// Stock reservation and order insertion are atomic.
-// =====================================================
-// ORDER REQUEST VALIDATION
-// =====================================================
 const createOrderSchema = z.object({
   productId: z.string().refine(
     (id) => mongoose.isValidObjectId(id),
@@ -835,7 +856,6 @@ const createOrderSchema = z.object({
     .max(10000, 'Quantity cannot exceed 10000.')
 }).strict();
 
-
 app.post('/api/orders', requireAuth, async (req, res, next) => {
   if (req.user.role !== 'user') {
     return res.status(403).json({
@@ -843,7 +863,6 @@ app.post('/api/orders', requireAuth, async (req, res, next) => {
     });
   }
 
-  // Validate the request body using Zod.
   const parsed = createOrderSchema.safeParse(req.body);
 
   if (!parsed.success) {
@@ -856,20 +875,16 @@ app.post('/api/orders', requireAuth, async (req, res, next) => {
     });
   }
 
-  // Only validated productId and quantity are accepted.
   const { productId, quantity } = parsed.data;
-
   const session = await mongoose.startSession();
   let createdOrder = null;
   let unavailableProduct = null;
 
   try {
     await session.withTransaction(async () => {
-      // Transaction callbacks may be retried.
       createdOrder = null;
       unavailableProduct = null;
 
-      // Conditionally reserve stock to prevent overselling.
       const product = await Product.findOneAndUpdate(
         {
           _id: productId,
@@ -884,11 +899,9 @@ app.post('/api/orders', requireAuth, async (req, res, next) => {
         unavailableProduct = await Product.findById(productId)
           .session(session)
           .lean();
-
         return;
       }
 
-      // Always calculate the order price using database data.
       const unitPrice = product.price;
       const totalAmount = Number(
         (unitPrice * quantity).toFixed(2)
@@ -939,9 +952,6 @@ app.post('/api/orders', requireAuth, async (req, res, next) => {
   }
 });
 
-
-// Customers see only their own orders.
-// Admins see orders from all customers.
 app.get('/api/orders', requireAuth, async (req, res, next) => {
   try {
     const filter = req.user.role === 'admin'
@@ -961,7 +971,6 @@ app.get('/api/orders', requireAuth, async (req, res, next) => {
   }
 });
 
-// Fetch one order, restricted to its owner unless the requester is admin.
 app.get('/api/orders/:id', requireAuth, async (req, res, next) => {
   try {
     const { id } = req.params;
@@ -1002,7 +1011,6 @@ const allowedOrderTransitions = {
   cancelled: []
 };
 
-// Admin updates order status.
 app.patch(
   '/api/orders/:id/status',
   requireAuth,
@@ -1045,18 +1053,12 @@ app.patch(
           return;
         }
 
-        if (
-          !allowedOrderTransitions[order.status].includes(nextStatus)
-        ) {
+        if (!allowedOrderTransitions[order.status].includes(nextStatus)) {
           failure = 'invalid-transition';
           return;
         }
 
-        // Restore stock exactly once when an order is cancelled.
-        if (
-          nextStatus === 'cancelled' &&
-          !order.stockRestored
-        ) {
+        if (nextStatus === 'cancelled' && !order.stockRestored) {
           const result = await Product.updateOne(
             { _id: order.productId },
             { $inc: { stock: order.quantity } },
@@ -1106,8 +1108,6 @@ app.patch(
   }
 );
 
-// Customer confirms receipt after the admin marks an order delivered.
-// Receipt confirmation also marks the order completed.
 app.post(
   '/api/orders/:id/received',
   requireAuth,
@@ -1159,7 +1159,6 @@ app.post(
         }
 
         const now = new Date();
-
         order.receivedAt = now;
 
         if (order.status === 'delivered') {
@@ -1200,9 +1199,7 @@ app.post(
   }
 );
 
-// =====================================================
-// EXISTING GENERIC ITEM ROUTES
-// =====================================================
+// ================= EXISTING GENERIC ITEM ROUTES =================
 
 app.get('/api/items', requireAuth, async (req, res, next) => {
   try {
@@ -1225,12 +1222,10 @@ app.get('/api/items', requireAuth, async (req, res, next) => {
 app.post('/api/items', requireAuth, async (req, res, next) => {
   try {
     const body = req.body ?? {};
-
     const title =
       typeof body.title === 'string'
         ? body.title.trim()
         : '';
-
     const details =
       typeof body.details === 'string'
         ? body.details.trim()
@@ -1260,9 +1255,7 @@ app.post('/api/items', requireAuth, async (req, res, next) => {
 
     const item = await Item.create(itemData);
 
-    return res.status(201).json({
-      item: publicItem(item)
-    });
+    return res.status(201).json({ item: publicItem(item) });
   } catch (error) {
     return next(error);
   }
@@ -1283,7 +1276,6 @@ app.put('/api/items/:id', requireAuth, async (req, res, next) => {
       typeof body.title === 'string'
         ? body.title.trim()
         : '';
-
     const details =
       typeof body.details === 'string'
         ? body.details.trim()
@@ -1345,48 +1337,39 @@ app.delete('/api/items/:id', requireAuth, async (req, res, next) => {
   }
 });
 
-// =====================================================
-// ERROR HANDLING
-// =====================================================
-
+// ================= ERROR HANDLING =================
 
 app.use((err, _req, res, next) => {
-  // If the response has already started, let Express handle it.
   if (res.headersSent) {
     return next(err);
   }
 
   console.error(err);
 
-  // Invalid JSON sent by the client.
   if (err?.type === 'entity.parse.failed') {
     return res.status(400).json({
       error: 'Invalid JSON in request body.'
     });
   }
 
-  // Request body exceeds the configured size limit.
   if (err?.type === 'entity.too.large') {
     return res.status(413).json({
       error: 'Request body is too large.'
     });
   }
 
-  // Duplicate values, such as an existing SKU or email.
   if (err?.code === 11000) {
     return res.status(409).json({
       error: 'A record with those unique details already exists.'
     });
   }
 
-  // Mongoose schema validation failures.
   if (err?.name === 'ValidationError') {
     return res.status(400).json({
       error: 'Please check the submitted details.'
     });
   }
 
-  // Invalid MongoDB IDs or incompatible database values.
   if (
     err?.name === 'CastError' ||
     err?.name === 'StrictModeError'
@@ -1396,16 +1379,12 @@ app.use((err, _req, res, next) => {
     });
   }
 
-  // Unexpected server errors.
   return res.status(500).json({
     error: 'Something went wrong. Please try again later.'
   });
 });
 
-
-// =====================================================
-// DATABASE CONNECTION AND SERVER STARTUP
-// =====================================================
+// ================= DATABASE CONNECTION AND STARTUP =================
 
 connectDatabase()
   .then(() => {
@@ -1416,14 +1395,9 @@ connectDatabase()
     });
   })
   .catch((error) => {
-    console.error(
-      'MongoDB connection failed:',
-      error.message
-    );
-
+    console.error('MongoDB connection failed:', error.message);
     console.error(
       'Check MONGODB_URI, the database credentials and the Atlas Network Access allowlist.'
     );
-
     process.exit(1);
   });

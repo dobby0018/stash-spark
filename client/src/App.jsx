@@ -1,4 +1,3 @@
-
 import { useCallback, useEffect, useState } from 'react';
 import {
   ArrowRight,
@@ -22,7 +21,7 @@ import {
   RefreshCw,
   Boxes
 } from 'lucide-react';
-
+import GoogleSignInButton from './GoogleSignInButton.jsx';
 import './inventory.css';
 
 const API_URL = (import.meta.env.VITE_API_URL || '').replace(/\/$/, '');
@@ -101,8 +100,9 @@ export default function App() {
 
   const [products, setProducts] = useState([]);
   const [orders, setOrders] = useState([]);
-  const [quantities, setQuantities] = useState({});
+  const [customers, setCustomers] = useState([]);
 
+  const [quantities, setQuantities] = useState({});
   const [search, setSearch] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('all');
 
@@ -131,20 +131,30 @@ export default function App() {
     window.setTimeout(() => setNotice(null), 4500);
   }, []);
 
+  // Load products.
   const loadProducts = useCallback(async () => {
     const data = await api('/products');
     setProducts(data.products || []);
   }, []);
 
+  // Load orders belonging to the signed-in user or all orders for an admin.
   const loadOrders = useCallback(async () => {
     const data = await api('/orders');
     setOrders(data.orders || []);
   }, []);
 
+  // Load customers for the admin customers page.
+  const loadCustomers = useCallback(async () => {
+    const data = await api('/admin/customers');
+    setCustomers(data.customers || []);
+  }, []);
+
+  // Refresh both products and orders.
   const refreshWorkspace = useCallback(async () => {
     await Promise.all([loadProducts(), loadOrders()]);
   }, [loadProducts, loadOrders]);
 
+  // Restore the session when the app loads or the browser is refreshed.
   useEffect(() => {
     let active = true;
 
@@ -155,6 +165,16 @@ export default function App() {
         if (!active) return;
 
         setUser(result.user);
+
+        // A first-time Google user must create a password before
+        // accessing the inventory dashboard.
+        if (result.needsPasswordSetup) {
+          setEmail(result.user?.email || '');
+          setPassword('');
+          setPage('set-password');
+          return;
+        }
+
         setPage('dashboard');
 
         const [productResult, orderResult] = await Promise.all([
@@ -169,7 +189,9 @@ export default function App() {
       } catch {
         // No valid session, so show the sign-in page.
       } finally {
-        if (active) setChecking(false);
+        if (active) {
+          setChecking(false);
+        }
       }
     }
 
@@ -180,6 +202,7 @@ export default function App() {
     };
   }, []);
 
+  // Standard email/password registration and sign-in.
   async function handleAuth(event) {
     event.preventDefault();
     setBusy(true);
@@ -224,9 +247,92 @@ export default function App() {
     }
   }
 
+  // Handle a Google credential returned by GoogleSignInButton.
+  async function handleGoogleCredential(credential) {
+    setBusy(true);
+
+    try {
+      const result = await api('/auth/google', {
+        method: 'POST',
+        body: JSON.stringify({ credential })
+      });
+
+      setUser(result.user);
+      setPassword('');
+
+      // First-time Google users have to set a password.
+      if (result.needsPasswordSetup) {
+        setEmail(result.user?.email || '');
+        setPage('set-password');
+        setView('catalog');
+
+        notify(
+          'Google verified. Create a password to finish setting up your account.'
+        );
+
+        return;
+      }
+
+      // Returning Google users can open their workspace immediately.
+      setPage('dashboard');
+      setView('catalog');
+
+      await refreshWorkspace();
+
+      notify('Welcome to StashSpark!');
+    } catch (error) {
+      notify(error.message, 'error');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // Save the password for a first-time Google user.
+  async function handleSetPassword(event) {
+    event.preventDefault();
+
+    if (password.length < 8 || password.length > 72) {
+      notify(
+        'Your password must be between 8 and 72 characters.',
+        'error'
+      );
+      return;
+    }
+
+    setBusy(true);
+
+    try {
+      const result = await api('/auth/set-password', {
+        method: 'POST',
+        body: JSON.stringify({ password })
+      });
+
+      if (result.user) {
+        setUser(result.user);
+      }
+
+      setPassword('');
+      setPage('dashboard');
+      setView('catalog');
+
+      await refreshWorkspace();
+
+      notify(
+        'Password created. You can now sign in with your email and password.'
+      );
+    } catch (error) {
+      notify(error.message, 'error');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // Sign out and clear the client-side workspace.
   async function signout() {
     try {
-      await api('/auth/signout', { method: 'POST' });
+      await api('/auth/signout', {
+        method: 'POST'
+      });
     } catch {
       // Clear local UI even if the network request fails.
     }
@@ -234,8 +340,11 @@ export default function App() {
     setUser(null);
     setProducts([]);
     setOrders([]);
+    setCustomers([]);
+
     setPage('signin');
     setView('catalog');
+
     setEmail('');
     setPassword('');
     setAdminCode('');
@@ -244,12 +353,14 @@ export default function App() {
     notify('You have signed out.');
   }
 
+  // Open the form to add a new product.
   function openNewProduct() {
     setEditingProductId(null);
     setProductForm(emptyProductForm);
     setShowProductForm(true);
   }
 
+  // Open the form to edit an existing product.
   function openEditProduct(product) {
     setEditingProductId(product.id);
 
@@ -266,6 +377,7 @@ export default function App() {
     setShowProductForm(true);
   }
 
+  // Create or update a product.
   async function saveProduct(event) {
     event.preventDefault();
     setBusy(true);
@@ -304,6 +416,7 @@ export default function App() {
     }
   }
 
+  // Deactivate a product.
   async function deactivateProduct(product) {
     if (
       !window.confirm(
@@ -319,12 +432,14 @@ export default function App() {
       });
 
       await loadProducts();
+
       notify('Product deactivated.');
     } catch (error) {
       notify(error.message, 'error');
     }
   }
 
+  // Place an order.
   async function placeOrder(product) {
     const quantity = Number(quantities[product.id] || 1);
 
@@ -366,6 +481,7 @@ export default function App() {
     }
   }
 
+  // Update the status of an order.
   async function updateOrderStatus(order, status) {
     setBusy(true);
 
@@ -376,6 +492,7 @@ export default function App() {
       });
 
       await refreshWorkspace();
+
       notify(`Order status updated: ${statusLabels[status]}.`);
     } catch (error) {
       notify(error.message, 'error');
@@ -384,6 +501,7 @@ export default function App() {
     }
   }
 
+  // Let a customer confirm receipt of their order.
   async function confirmReceived(order) {
     setBusy(true);
 
@@ -393,6 +511,7 @@ export default function App() {
       });
 
       await refreshWorkspace();
+
       notify('Receipt confirmed. Thank you!');
     } catch (error) {
       notify(error.message, 'error');
@@ -401,10 +520,58 @@ export default function App() {
     }
   }
 
+  // Open the admin customers view.
+  async function openCustomers() {
+    try {
+      setBusy(true);
+
+      await loadCustomers();
+
+      setView('customers');
+    } catch (error) {
+      notify(error.message, 'error');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // Delete a customer and their orders.
+  async function deleteCustomer(customer) {
+    const confirmed = window.confirm(
+      `Permanently delete ${customer.email} and all ${customer.orderCount} of their orders? This cannot be undone.`
+    );
+
+    if (!confirmed) return;
+
+    try {
+      setBusy(true);
+
+      const result = await api(`/admin/customers/${customer.id}`, {
+        method: 'DELETE'
+      });
+
+      await Promise.all([
+        loadCustomers(),
+        loadOrders(),
+        loadProducts()
+      ]);
+
+      notify(
+        result.message || 'Customer and their orders were deleted.'
+      );
+    } catch (error) {
+      notify(error.message, 'error');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // Product categories available in the catalogue.
   const categories = [
     ...new Set(products.filter(p => p.isActive).map(p => p.category))
   ].sort();
 
+  // Filter products based on the search and category inputs.
   const visibleProducts = products.filter(product => {
     const query = search.trim().toLowerCase();
 
@@ -422,6 +589,7 @@ export default function App() {
   });
 
   const activeProducts = products.filter(p => p.isActive);
+
   const lowStockProducts = activeProducts.filter(
     p => p.stock <= p.reorderLevel
   );
@@ -440,6 +608,7 @@ export default function App() {
     !['completed', 'cancelled'].includes(order.status)
   ).length;
 
+  // Show a loading screen while checking the existing session.
   if (checking) {
     return (
       <div className="loading-screen">
@@ -449,6 +618,167 @@ export default function App() {
     );
   }
 
+  // Dedicated password setup screen for first-time Google accounts.
+  if (page === 'set-password' && user) {
+    return (
+      <main className="auth-layout">
+        <section className="auth-left">
+          <div className="auth-top">
+            <Brand />
+
+            <span className="secure-label">
+              <ShieldCheck size={15} /> Account setup
+            </span>
+          </div>
+
+          <div className="auth-content">
+            <div className="eyebrow">
+              <span className="eyebrow-dot" />
+              ONE MORE STEP
+            </div>
+
+            <h1>
+              Your account, <br />
+              <span>your password.</span>
+            </h1>
+
+            <p className="auth-description">
+              Your Google account is verified. Create a StashSpark password so
+              you can also sign in with your email address whenever you need to.
+            </p>
+
+            <div className="feature-list">
+              <div>
+                <span className="feature-icon">
+                  <ShieldCheck size={18} />
+                </span>
+
+                <span>
+                  <strong>Verified identity</strong>
+                  <small>Your Google sign-in has been verified.</small>
+                </span>
+              </div>
+
+              <div>
+                <span className="feature-icon">
+                  <LockKeyhole size={18} />
+                </span>
+
+                <span>
+                  <strong>Your own password</strong>
+                  <small>Use at least 8 characters.</small>
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <div className="auth-footer">
+            StashSpark — your inventory, in sync.
+          </div>
+        </section>
+
+        <section className="auth-right">
+          <div className="mobile-brand">
+            <Brand />
+          </div>
+
+          <div className="auth-card-wrap">
+            <div className="auth-card-heading">
+              <div className="form-mark">
+                <LockKeyhole size={22} />
+              </div>
+
+              <h2>Create your password</h2>
+
+              <p>
+                Finish setting up your account to open your workspace.
+              </p>
+            </div>
+
+            <form className="auth-form" onSubmit={handleSetPassword}>
+              <label htmlFor="google-account-email">
+                Google account email
+              </label>
+
+              <input
+                id="google-account-email"
+                type="email"
+                value={user.email || email}
+                readOnly
+                disabled
+              />
+
+              <div className="password-label">
+                <label htmlFor="setup-password">New password</label>
+                <span>8 characters minimum</span>
+              </div>
+
+              <input
+                id="setup-password"
+                type="password"
+                value={password}
+                onChange={event => setPassword(event.target.value)}
+                placeholder="Create a password"
+                autoComplete="new-password"
+                minLength={8}
+                maxLength={72}
+                required
+              />
+
+              <button
+                className="primary-button auth-submit"
+                disabled={busy}
+              >
+                {busy ? 'Saving password…' : 'Save password'}
+                {!busy && <ArrowRight size={17} />}
+              </button>
+            </form>
+
+            <div className="auth-switch">
+              Need to use another account?{' '}
+              <button
+                type="button"
+                disabled={busy}
+                onClick={signout}
+              >
+                Sign out
+              </button>
+            </div>
+
+            <div className="auth-legal">
+              <ShieldCheck size={14} />
+              Your password is stored securely by StashSpark.
+            </div>
+          </div>
+
+          <div className="right-bottom">
+            Built for better stock management.
+          </div>
+        </section>
+
+        {notice && (
+          <div className={`toast ${notice.type}`}>
+            <span>
+              {notice.type === 'success'
+                ? <Check size={17} />
+                : <X size={17} />}
+            </span>
+
+            {notice.message}
+
+            <button
+              onClick={() => setNotice(null)}
+              aria-label="Dismiss"
+            >
+              <X size={15} />
+            </button>
+          </div>
+        )}
+      </main>
+    );
+  }
+
+  // Sign-in and registration screens.
   if (!user || page !== 'dashboard') {
     const isSignup = page === 'signup';
 
@@ -457,6 +787,7 @@ export default function App() {
         <section className="auth-left">
           <div className="auth-top">
             <Brand />
+
             <span className="secure-label">
               <ShieldCheck size={15} /> Inventory, organized
             </span>
@@ -481,21 +812,32 @@ export default function App() {
 
             <div className="feature-list">
               <div>
-                <span className="feature-icon"><Package size={18} /></span>
+                <span className="feature-icon">
+                  <Package size={18} />
+                </span>
+
                 <span>
                   <strong>Product catalogue</strong>
                   <small>Browse items and available stock.</small>
                 </span>
               </div>
+
               <div>
-                <span className="feature-icon"><ShoppingCart size={18} /></span>
+                <span className="feature-icon">
+                  <ShoppingCart size={18} />
+                </span>
+
                 <span>
                   <strong>Simple ordering</strong>
                   <small>Place orders and follow their progress.</small>
                 </span>
               </div>
+
               <div>
-                <span className="feature-icon"><ShieldCheck size={18} /></span>
+                <span className="feature-icon">
+                  <ShieldCheck size={18} />
+                </span>
+
                 <span>
                   <strong>Role-based access</strong>
                   <small>Customers order; admins manage inventory.</small>
@@ -510,15 +852,22 @@ export default function App() {
         </section>
 
         <section className="auth-right">
-          <div className="mobile-brand"><Brand /></div>
+          <div className="mobile-brand">
+            <Brand />
+          </div>
 
           <div className="auth-card-wrap">
             <div className="auth-card-heading">
               <div className="form-mark">
-                {isSignup ? <FilePlus2 size={22} /> : <Cloud size={22} />}
+                {isSignup
+                  ? <FilePlus2 size={22} />
+                  : <Cloud size={22} />}
               </div>
 
-              <h2>{isSignup ? 'Create your account' : 'Welcome back'}</h2>
+              <h2>
+                {isSignup ? 'Create your account' : 'Welcome back'}
+              </h2>
+
               <p>
                 {isSignup
                   ? 'Create a customer account or register as an authorized admin.'
@@ -530,6 +879,7 @@ export default function App() {
               {isSignup && (
                 <>
                   <label htmlFor="account-role">Account type</label>
+
                   <select
                     id="account-role"
                     value={selectedRole}
@@ -547,6 +897,7 @@ export default function App() {
                       <label htmlFor="admin-code">
                         <LockKeyhole size={14} /> Admin invitation code
                       </label>
+
                       <input
                         id="admin-code"
                         type="password"
@@ -556,6 +907,7 @@ export default function App() {
                         autoComplete="off"
                         required
                       />
+
                       <p className="role-help">
                         Admin registration requires an authorized invitation code.
                       </p>
@@ -565,6 +917,7 @@ export default function App() {
               )}
 
               <label htmlFor="email">Email address</label>
+
               <input
                 id="email"
                 type="email"
@@ -586,22 +939,54 @@ export default function App() {
                 type="password"
                 value={password}
                 onChange={event => setPassword(event.target.value)}
-                placeholder={isSignup ? 'Create a password' : 'Enter your password'}
+                placeholder={
+                  isSignup
+                    ? 'Create a password'
+                    : 'Enter your password'
+                }
                 autoComplete={isSignup ? 'new-password' : 'current-password'}
                 minLength={isSignup ? 8 : 1}
                 maxLength={72}
                 required
               />
 
-              <button className="primary-button auth-submit" disabled={busy}>
-                {busy ? 'Please wait…' : isSignup ? 'Create account' : 'Sign in'}
+              <button
+                className="primary-button auth-submit"
+                disabled={busy}
+              >
+                {busy
+                  ? 'Please wait…'
+                  : isSignup
+                    ? 'Create account'
+                    : 'Sign in'}
+
                 {!busy && <ArrowRight size={17} />}
               </button>
             </form>
 
+            {(!isSignup || selectedRole === 'user') && (
+              <div className="google-auth-area">
+                <div className="google-auth-divider">
+                  <span>or</span>
+                </div>
+
+                <GoogleSignInButton
+                  onCredential={handleGoogleCredential}
+                  disabled={busy}
+                />
+
+                <p className="google-signin-note">
+                  Google sign-in creates a customer account.
+                </p>
+              </div>
+            )}
+
             <div className="auth-switch">
-              {isSignup ? 'Already have an account?' : 'New to StashSpark?'}
+              {isSignup
+                ? 'Already have an account?'
+                : 'New to StashSpark?'}
               {' '}
+
               <button
                 onClick={() => {
                   setPage(isSignup ? 'signin' : 'signup');
@@ -620,16 +1005,25 @@ export default function App() {
             </div>
           </div>
 
-          <div className="right-bottom">Built for better stock management.</div>
+          <div className="right-bottom">
+            Built for better stock management.
+          </div>
         </section>
 
         {notice && (
           <div className={`toast ${notice.type}`}>
             <span>
-              {notice.type === 'success' ? <Check size={17} /> : <X size={17} />}
+              {notice.type === 'success'
+                ? <Check size={17} />
+                : <X size={17} />}
             </span>
+
             {notice.message}
-            <button onClick={() => setNotice(null)} aria-label="Dismiss">
+
+            <button
+              onClick={() => setNotice(null)}
+              aria-label="Dismiss"
+            >
               <X size={15} />
             </button>
           </div>
@@ -638,6 +1032,7 @@ export default function App() {
     );
   }
 
+  // Main inventory dashboard.
   return (
     <main className="app-shell inventory-shell">
       <header className="topbar">
@@ -650,7 +1045,10 @@ export default function App() {
           </span>
 
           <div className={`role-badge ${isAdmin ? 'admin' : 'user'}`}>
-            {isAdmin ? <ShieldCheck size={13} /> : <Users size={13} />}
+            {isAdmin
+              ? <ShieldCheck size={13} />
+              : <Users size={13} />}
+
             {isAdmin ? 'Admin' : 'Customer'}
           </div>
 
@@ -687,7 +1085,10 @@ export default function App() {
           </div>
 
           {isAdmin && (
-            <button className="primary-button add-button" onClick={openNewProduct}>
+            <button
+              className="primary-button add-button"
+              onClick={openNewProduct}
+            >
               <Plus size={18} /> Add product
             </button>
           )}
@@ -708,14 +1109,30 @@ export default function App() {
           >
             <ClipboardList size={17} />
             {isAdmin ? 'All orders' : 'My orders'}
+
             {pendingOrders > 0 && (
               <span className="nav-count">{pendingOrders}</span>
             )}
           </button>
 
+          {isAdmin && (
+            <button
+              className={view === 'customers' ? 'active' : ''}
+              onClick={openCustomers}
+              disabled={busy}
+            >
+              <Users size={17} />
+              Customers
+            </button>
+          )}
+
           <button
             className="refresh-button"
-            onClick={() => refreshWorkspace().catch(error => notify(error.message, 'error'))}
+            onClick={() =>
+              refreshWorkspace().catch(error =>
+                notify(error.message, 'error')
+              )
+            }
             title="Refresh data"
           >
             <RefreshCw size={16} />
@@ -727,31 +1144,53 @@ export default function App() {
           <>
             <div className="inventory-stats">
               <div className="inventory-stat">
-                <span className="inventory-stat-icon purple"><Package size={19} /></span>
-                <span className="inventory-stat-label">Active products</span>
+                <span className="inventory-stat-icon purple">
+                  <Package size={19} />
+                </span>
+
+                <span className="inventory-stat-label">
+                  Active products
+                </span>
+
                 <strong>{activeProducts.length}</strong>
               </div>
 
               <div className="inventory-stat">
-                <span className="inventory-stat-icon blue"><Boxes size={19} /></span>
+                <span className="inventory-stat-icon blue">
+                  <Boxes size={19} />
+                </span>
+
                 <span className="inventory-stat-label">
                   {isAdmin ? 'Units in stock' : 'Products available'}
                 </span>
-                <strong>{isAdmin ? totalUnits : activeProducts.length}</strong>
+
+                <strong>
+                  {isAdmin ? totalUnits : activeProducts.length}
+                </strong>
               </div>
 
               <div className="inventory-stat">
                 <span className="inventory-stat-icon orange">
                   <AlertTriangle size={19} />
                 </span>
-                <span className="inventory-stat-label">Low stock</span>
+
+                <span className="inventory-stat-label">
+                  Low stock
+                </span>
+
                 <strong>{lowStockProducts.length}</strong>
               </div>
 
               {isAdmin && (
                 <div className="inventory-stat">
-                  <span className="inventory-stat-icon green"><Layers3 size={19} /></span>
-                  <span className="inventory-stat-label">Stock value at selling price</span>
+                  <span className="inventory-stat-icon green">
+                    <Layers3 size={19} />
+                  </span>
+
+                  <span className="inventory-stat-label">
+                    Stock value at selling price
+                  </span>
+
                   <strong>{money(inventoryValue)}</strong>
                 </div>
               )}
@@ -760,9 +1199,15 @@ export default function App() {
             {isAdmin && lowStockProducts.length > 0 && (
               <div className="low-stock-banner">
                 <AlertTriangle size={18} />
+
                 <div>
-                  <strong>{lowStockProducts.length} product(s) need attention</strong>
-                  <p>Review low quantities and consider updating inventory.</p>
+                  <strong>
+                    {lowStockProducts.length} product(s) need attention
+                  </strong>
+
+                  <p>
+                    Review low quantities and consider updating inventory.
+                  </p>
                 </div>
               </div>
             )}
@@ -770,7 +1215,10 @@ export default function App() {
             <section className="inventory-panel">
               <div className="inventory-panel-heading">
                 <div>
-                  <h2>{isAdmin ? 'Product inventory' : 'Browse products'}</h2>
+                  <h2>
+                    {isAdmin ? 'Product inventory' : 'Browse products'}
+                  </h2>
+
                   <p>
                     {isAdmin
                       ? 'Update product information and available stock.'
@@ -786,6 +1234,7 @@ export default function App() {
               <div className="inventory-filters">
                 <div className="inventory-search">
                   <Search size={17} />
+
                   <input
                     value={search}
                     onChange={event => setSearch(event.target.value)}
@@ -799,6 +1248,7 @@ export default function App() {
                   aria-label="Filter by category"
                 >
                   <option value="all">All categories</option>
+
                   {categories.map(category => (
                     <option key={category} value={category}>
                       {category}
@@ -811,13 +1261,18 @@ export default function App() {
                 <div className="inventory-empty">
                   <Package size={32} />
                   <h3>No products found</h3>
+
                   <p>
                     {isAdmin
                       ? 'Add your first product or adjust the search filters.'
                       : 'There are no products matching your search right now.'}
                   </p>
+
                   {isAdmin && (
-                    <button className="primary-button" onClick={openNewProduct}>
+                    <button
+                      className="primary-button"
+                      onClick={openNewProduct}
+                    >
                       <Plus size={16} /> Add product
                     </button>
                   )}
@@ -828,13 +1283,18 @@ export default function App() {
                     const lowStock = product.stock <= product.reorderLevel;
 
                     return (
-                      <article className="product-card" key={product.id}>
+                      <article
+                        className="product-card"
+                        key={product.id}
+                      >
                         <div className="product-card-top">
                           <div className="product-image-placeholder">
                             <Package size={28} />
                           </div>
 
-                          <span className={`stock-badge ${lowStock ? 'low' : 'good'}`}>
+                          <span
+                            className={`stock-badge ${lowStock ? 'low' : 'good'}`}
+                          >
                             {product.stock === 0
                               ? 'Out of stock'
                               : lowStock
@@ -843,9 +1303,16 @@ export default function App() {
                           </span>
                         </div>
 
-                        <div className="product-category">{product.category}</div>
+                        <div className="product-category">
+                          {product.category}
+                        </div>
+
                         <h3>{product.name}</h3>
-                        <p className="product-sku">SKU: {product.sku}</p>
+
+                        <p className="product-sku">
+                          SKU: {product.sku}
+                        </p>
+
                         <p className="product-description">
                           {product.description || 'No description provided.'}
                         </p>
@@ -881,7 +1348,9 @@ export default function App() {
                           </div>
                         ) : (
                           <div className="product-order-actions">
-                            <label htmlFor={`qty-${product.id}`}>Quantity</label>
+                            <label htmlFor={`qty-${product.id}`}>
+                              Quantity
+                            </label>
 
                             <input
                               id={`qty-${product.id}`}
@@ -904,7 +1373,10 @@ export default function App() {
                               onClick={() => placeOrder(product)}
                             >
                               <ShoppingCart size={15} />
-                              {product.stock < 1 ? 'Unavailable' : 'Place order'}
+
+                              {product.stock < 1
+                                ? 'Unavailable'
+                                : 'Place order'}
                             </button>
                           </div>
                         )}
@@ -922,6 +1394,7 @@ export default function App() {
             <div className="inventory-panel-heading">
               <div>
                 <h2>{isAdmin ? 'Customer orders' : 'My orders'}</h2>
+
                 <p>
                   {isAdmin
                     ? 'Review orders and update their fulfilment status.'
@@ -929,13 +1402,16 @@ export default function App() {
                 </p>
               </div>
 
-              <span className="item-count">{orders.length} orders</span>
+              <span className="item-count">
+                {orders.length} orders
+              </span>
             </div>
 
             {orders.length === 0 ? (
               <div className="inventory-empty">
                 <ShoppingCart size={32} />
                 <h3>No orders yet</h3>
+
                 <p>
                   {isAdmin
                     ? 'Customer orders will appear here.'
@@ -943,7 +1419,10 @@ export default function App() {
                 </p>
 
                 {!isAdmin && (
-                  <button className="primary-button" onClick={() => setView('catalog')}>
+                  <button
+                    className="primary-button"
+                    onClick={() => setView('catalog')}
+                  >
                     Browse products
                   </button>
                 )}
@@ -954,7 +1433,10 @@ export default function App() {
                   const nextStatuses = transitions[order.status] || [];
 
                   return (
-                    <article className="order-card" key={order.id}>
+                    <article
+                      className="order-card"
+                      key={order.id}
+                    >
                       <div className="order-card-heading">
                         <div className="order-product-icon">
                           <Package size={21} />
@@ -962,6 +1444,7 @@ export default function App() {
 
                         <div className="order-heading-text">
                           <h3>{order.productName}</h3>
+
                           <p>
                             Order #{order.id.slice(-8).toUpperCase()}
                             {' · '}
@@ -969,7 +1452,9 @@ export default function App() {
                           </p>
                         </div>
 
-                        <span className={`order-status status-${order.status}`}>
+                        <span
+                          className={`order-status status-${order.status}`}
+                        >
                           {statusLabels[order.status] || order.status}
                         </span>
                       </div>
@@ -986,14 +1471,17 @@ export default function App() {
                           <span>Quantity</span>
                           <strong>{order.quantity}</strong>
                         </div>
+
                         <div>
                           <span>Unit price</span>
                           <strong>{money(order.unitPrice)}</strong>
                         </div>
+
                         <div>
                           <span>Total</span>
                           <strong>{money(order.totalAmount)}</strong>
                         </div>
+
                         <div>
                           <span>SKU</span>
                           <strong>{order.sku}</strong>
@@ -1051,14 +1539,83 @@ export default function App() {
           </section>
         )}
 
+        {view === 'customers' && isAdmin && (
+          <section className="inventory-panel customers-panel">
+            <div className="inventory-panel-heading">
+              <div>
+                <h2>Customers</h2>
+                <p>View customer accounts and their order counts.</p>
+              </div>
+
+              <button
+                className="secondary-button"
+                disabled={busy}
+                onClick={openCustomers}
+              >
+                <RefreshCw size={15} /> Refresh
+              </button>
+            </div>
+
+            {customers.length === 0 ? (
+              <div className="inventory-empty">
+                <Users size={32} />
+                <h3>No customers found</h3>
+                <p>Customer accounts will appear here after registration.</p>
+              </div>
+            ) : (
+              <div className="customer-grid">
+                {customers.map(customer => (
+                  <article
+                    className="customer-card"
+                    key={customer.id}
+                  >
+                    <div className="customer-card-header">
+                      <div className="customer-avatar">
+                        <Users size={20} />
+                      </div>
+
+                      <div className="customer-card-identity">
+                        <h3>{customer.email}</h3>
+
+                        <p>
+                          Joined{' '}
+                          {new Date(customer.createdAt).toLocaleDateString()}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="customer-order-count">
+                      <span>Total orders</span>
+                      <strong>{customer.orderCount}</strong>
+                    </div>
+
+                    <button
+                      className="danger-button customer-delete-button"
+                      disabled={busy}
+                      onClick={() => deleteCustomer(customer)}
+                    >
+                      <Trash2 size={15} />
+                      Delete customer and orders
+                    </button>
+                  </article>
+                ))}
+              </div>
+            )}
+          </section>
+        )}
+
         <footer className="dashboard-footer">
           <span>
             <ShieldCheck size={15} />
+
             {isAdmin
               ? 'Only administrators can manage inventory.'
               : 'Your orders are visible only to you and authorized admins.'}
           </span>
-          <span>StashSpark <span className="footer-heart">✳</span></span>
+
+          <span>
+            StashSpark <span className="footer-heart">✳</span>
+          </span>
         </footer>
       </section>
 
@@ -1088,7 +1645,9 @@ export default function App() {
                   {editingProductId ? 'Edit product' : 'Add a product'}
                 </h2>
 
-                <p>Product and stock details are saved to MongoDB.</p>
+                <p>
+                  Product and stock details are saved to MongoDB.
+                </p>
               </div>
 
               <button
@@ -1102,13 +1661,16 @@ export default function App() {
 
             <form className="item-form product-form" onSubmit={saveProduct}>
               <label htmlFor="product-name">Product name</label>
+
               <input
                 id="product-name"
                 value={productForm.name}
-                onChange={event => setProductForm({
-                  ...productForm,
-                  name: event.target.value
-                })}
+                onChange={event =>
+                  setProductForm({
+                    ...productForm,
+                    name: event.target.value
+                  })
+                }
                 required
                 maxLength={120}
               />
@@ -1116,13 +1678,16 @@ export default function App() {
               <div className="product-form-two">
                 <div>
                   <label htmlFor="product-sku">SKU</label>
+
                   <input
                     id="product-sku"
                     value={productForm.sku}
-                    onChange={event => setProductForm({
-                      ...productForm,
-                      sku: event.target.value.toUpperCase()
-                    })}
+                    onChange={event =>
+                      setProductForm({
+                        ...productForm,
+                        sku: event.target.value.toUpperCase()
+                      })
+                    }
                     required
                     maxLength={40}
                   />
@@ -1130,13 +1695,16 @@ export default function App() {
 
                 <div>
                   <label htmlFor="product-category">Category</label>
+
                   <input
                     id="product-category"
                     value={productForm.category}
-                    onChange={event => setProductForm({
-                      ...productForm,
-                      category: event.target.value
-                    })}
+                    onChange={event =>
+                      setProductForm({
+                        ...productForm,
+                        category: event.target.value
+                      })
+                    }
                     required
                     maxLength={80}
                   />
@@ -1144,13 +1712,16 @@ export default function App() {
               </div>
 
               <label htmlFor="product-description">Description</label>
+
               <textarea
                 id="product-description"
                 value={productForm.description}
-                onChange={event => setProductForm({
-                  ...productForm,
-                  description: event.target.value
-                })}
+                onChange={event =>
+                  setProductForm({
+                    ...productForm,
+                    description: event.target.value
+                  })
+                }
                 rows={3}
                 maxLength={1000}
               />
@@ -1158,48 +1729,57 @@ export default function App() {
               <div className="product-form-three">
                 <div>
                   <label htmlFor="product-price">Price (₹)</label>
+
                   <input
                     id="product-price"
                     type="number"
                     min="0"
                     step="0.01"
                     value={productForm.price}
-                    onChange={event => setProductForm({
-                      ...productForm,
-                      price: event.target.value
-                    })}
+                    onChange={event =>
+                      setProductForm({
+                        ...productForm,
+                        price: event.target.value
+                      })
+                    }
                     required
                   />
                 </div>
 
                 <div>
                   <label htmlFor="product-stock">Stock</label>
+
                   <input
                     id="product-stock"
                     type="number"
                     min="0"
                     step="1"
                     value={productForm.stock}
-                    onChange={event => setProductForm({
-                      ...productForm,
-                      stock: event.target.value
-                    })}
+                    onChange={event =>
+                      setProductForm({
+                        ...productForm,
+                        stock: event.target.value
+                      })
+                    }
                     required
                   />
                 </div>
 
                 <div>
                   <label htmlFor="product-reorder">Reorder at</label>
+
                   <input
                     id="product-reorder"
                     type="number"
                     min="0"
                     step="1"
                     value={productForm.reorderLevel}
-                    onChange={event => setProductForm({
-                      ...productForm,
-                      reorderLevel: event.target.value
-                    })}
+                    onChange={event =>
+                      setProductForm({
+                        ...productForm,
+                        reorderLevel: event.target.value
+                      })
+                    }
                     required
                   />
                 </div>
@@ -1214,12 +1794,16 @@ export default function App() {
                   Cancel
                 </button>
 
-                <button className="primary-button" disabled={busy}>
+                <button
+                  className="primary-button"
+                  disabled={busy}
+                >
                   {busy
                     ? 'Saving…'
                     : editingProductId
                       ? 'Save changes'
                       : 'Create product'}
+
                   {!busy && <ArrowRight size={16} />}
                 </button>
               </div>
@@ -1231,10 +1815,17 @@ export default function App() {
       {notice && (
         <div className={`toast ${notice.type}`}>
           <span>
-            {notice.type === 'success' ? <Check size={17} /> : <X size={17} />}
+            {notice.type === 'success'
+              ? <Check size={17} />
+              : <X size={17} />}
           </span>
+
           {notice.message}
-          <button onClick={() => setNotice(null)} aria-label="Dismiss">
+
+          <button
+            onClick={() => setNotice(null)}
+            aria-label="Dismiss"
+          >
             <X size={15} />
           </button>
         </div>

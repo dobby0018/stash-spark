@@ -1,3 +1,4 @@
+
 import mongoose from 'mongoose';
 
 const userSchema = new mongoose.Schema({
@@ -9,11 +10,23 @@ const userSchema = new mongoose.Schema({
     unique: true,
     maxlength: 254
   },
+
+  // Required for password accounts, optional for Google accounts.
   passwordHash: {
     type: String,
-    required: true,
+    required: function () {
+      return !this.googleId;
+    },
     select: false
   },
+
+  // Google's stable unique account identifier.
+  googleId: {
+    type: String,
+    unique: true,
+    sparse: true
+  },
+
   role: {
     type: String,
     enum: ['user', 'admin'],
@@ -25,4 +38,6 @@ const userSchema = new mongoose.Schema({
   versionKey: false
 });
 
-export const User = mongoose.models.User || mongoose.model('User', userSchema);
+export const User =
+  mongoose.models.User ||
+  mongoose.model('User', userSchema);

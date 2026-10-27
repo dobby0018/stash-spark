@@ -745,3 +745,132 @@
     flex-shrink: 0;
   }
 }
+
+.google-auth-area {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  margin-top: 18px;
+}
+
+.google-auth-divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  color: #718096;
+  font-size: 12px;
+}
+
+.google-auth-divider::before,
+.google-auth-divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: #e2e8f0;
+}
+
+.google-signin-container {
+  display: flex;
+  justify-content: center;
+  width: 100%;
+  min-height: 44px;
+}
+
+.google-signin-note {
+  margin: 0;
+  color: #718096;
+  font-size: 12px;
+  text-align: center;
+}
+
+.customers-panel {
+  margin-top: 24px;
+}
+
+.customer-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 18px;
+}
+
+.customer-card {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding: 20px;
+  border: 1px solid #e2e8f0;
+  border-radius: 14px;
+  background: #fff;
+  min-width: 0;
+}
+
+.customer-card-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  min-width: 0;
+}
+
+.customer-avatar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 42px;
+  height: 42px;
+  color: #4f46e5;
+  background: #eef2ff;
+  border-radius: 12px;
+}
+
+.customer-card-identity {
+  flex: 1;
+  min-width: 0;
+}
+
+.customer-card-identity h3 {
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-size: 14px;
+}
+
+.customer-card-identity p {
+  margin: 6px 0 0;
+  color: #718096;
+  font-size: 12px;
+}
+
+.customer-order-count {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 0;
+  border-top: 1px solid #e2e8f0;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.customer-order-count span {
+  color: #718096;
+  font-size: 13px;
+}
+
+.customer-order-count strong {
+  font-size: 20px;
+}
+
+.customer-delete-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+}
+
+@media (max-width: 600px) {
+  .customer-card {
+    padding: 16px;
+  }
+}
