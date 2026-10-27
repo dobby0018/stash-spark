@@ -1,10 +1,20 @@
 import mongoose from 'mongoose';
 
 const itemSchema = new mongoose.Schema({
+  // Personal items belong to one user. Admin items belong to the shared
+  // admin workspace, so they intentionally do not have a userId.
   userId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
-    required: true,
+    required: function requireUserForPersonalItems() {
+      return this.scope !== 'admin';
+    },
+    index: true
+  },
+  scope: {
+    type: String,
+    enum: ['personal', 'admin'],
+    default: 'personal',
     index: true
   },
   title: {
@@ -25,5 +35,6 @@ const itemSchema = new mongoose.Schema({
 });
 
 itemSchema.index({ userId: 1, createdAt: -1 });
+itemSchema.index({ scope: 1, createdAt: -1 });
 
 export const Item = mongoose.models.Item || mongoose.model('Item', itemSchema);

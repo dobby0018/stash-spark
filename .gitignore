@@ -5,3 +5,5 @@ client/dist/
 server/.env
 .env
 .DS_Store
+.env.*
+!.env.example
